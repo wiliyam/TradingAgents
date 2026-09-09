@@ -533,7 +533,12 @@ class TradingAgentsGraph:
 
         # None resumes an existing checkpoint; init_agent_state starts fresh (#1249).
         graph_input = self.checkpoint_input(init_agent_state)
-        if self.debug:
+        if getattr(self, "progress_callback", None):
+            final_state = {}
+            for chunk in self.graph.stream(graph_input, **args):
+                final_state.update(chunk)
+                self.progress_callback(chunk)
+        elif self.debug:
             trace = []
             last_printed = None
             for chunk in self.graph.stream(graph_input, **args):

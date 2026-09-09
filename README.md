@@ -1,3 +1,17 @@
+# Arkbyte TradingAgents fork
+
+This fork includes the **Next.js research dashboard**, private Python API, Oracle
+hosting configuration, Codex CLI integration and optional Telegram notifications.
+
+- [Dashboard build and screens](frontend/README.md)
+- [Deployment, security and operations](dashboard/README.md)
+
+Charts, all saved agent reports, research signals and history are available in the
+dashboard. Brokerage order execution is not enabled. Original project documentation
+and attribution follow below.
+
+---
+
 <p align="center">
   <img src="assets/TauricResearch.png" style="width: 60%; height: auto;">
 </p>

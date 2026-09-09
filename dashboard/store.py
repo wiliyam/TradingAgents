@@ -21,6 +21,12 @@ class Store:
                     id TEXT PRIMARY KEY, symbol TEXT NOT NULL, day TEXT NOT NULL,
                     mode TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL,
                     result TEXT, error TEXT);
+                CREATE TABLE IF NOT EXISTS progress (
+                    job_id TEXT NOT NULL, name TEXT NOT NULL, content TEXT NOT NULL,
+                    updated REAL NOT NULL, PRIMARY KEY(job_id,name));
+                CREATE TABLE IF NOT EXISTS notifications (
+                    job_id TEXT PRIMARY KEY, status TEXT NOT NULL, updated REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS integrations (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT);
                 CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT);
                 CREATE TABLE IF NOT EXISTS attempts (ip TEXT, created REAL);
                 CREATE INDEX IF NOT EXISTS attempts_ip ON attempts(ip, created);
@@ -99,6 +105,30 @@ class Store:
                 ),
             )
 
+    def progress(self, job_id, fields):
+        with self.connection() as db:
+            for name, content in fields.items():
+                encoded = json.dumps(content)
+                db.execute(
+                    "INSERT INTO progress VALUES(?,?,?,?) ON CONFLICT(job_id,name) DO UPDATE SET content=excluded.content,updated=excluded.updated WHERE progress.content != excluded.content",
+                    (job_id, name, encoded, time.time()),
+                )
+
+    def telegram(self):
+        with self.connection() as db:
+            row = db.execute("SELECT value FROM integrations WHERE id=1").fetchone()
+        return json.loads(row[0]) if row else {"token": "", "channel": "", "enabled": False}
+
+    def save_telegram(self, value):
+        with self.connection() as db:
+            db.execute("INSERT OR REPLACE INTO integrations VALUES(1,?)", (json.dumps(value),))
+
+    def notification(self, job_id, status):
+        with self.connection() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO notifications VALUES(?,?,?)", (job_id, status, time.time())
+            )
+
     def recover(self):
         with self.connection() as db:
             db.execute(
@@ -112,6 +142,15 @@ class Store:
             return None
         value = dict(row)
         value["result"] = json.loads(value["result"]) if value["result"] else None
+        with self.connection() as db:
+            value["progress"] = {
+                r["name"]: {"content": json.loads(r["content"]), "updated": r["updated"]}
+                for r in db.execute("SELECT * FROM progress WHERE job_id=?", (job_id,))
+            }
+            delivery = db.execute(
+                "SELECT status,updated FROM notifications WHERE job_id=?", (job_id,)
+            ).fetchone()
+            value["notification"] = dict(delivery) if delivery else None
         return value
 
     def jobs(self):

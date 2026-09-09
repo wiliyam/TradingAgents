@@ -1,7 +1,6 @@
 """Security and job lifecycle checks without external API calls."""
 
 import json
-import re
 from datetime import date, timedelta
 
 import pytest
@@ -12,7 +11,11 @@ from dashboard.store import Store
 
 
 @pytest.fixture
-def app(tmp_path):
+def app(tmp_path, monkeypatch):
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "index.html").write_text("<!doctype html><html><body>Next.js test shell</body></html>")
+    monkeypatch.setenv("DASHBOARD_WEB_DIR", str(web))
     (tmp_path / "auth.json").write_text(
         json.dumps(
             {
@@ -33,8 +36,7 @@ def client(app):
 
 
 def csrf(client, path="/login"):
-    response = client.get(path)
-    return re.search(r'name="csrf" value="([^"]+)"', response.text)[1]
+    return client.get("/api/session").json["csrf"]
 
 
 def login(client):
@@ -128,16 +130,16 @@ def test_snapshot_queue_and_duplicate_limit(client, app):
     }
     response = client.post("/jobs", data=data)
     assert response.status_code == 302
-    assert client.get(response.location).status_code == 200
+    assert client.get(response.location).status_code == 302
     assert client.post("/jobs", data=data).status_code == 409
     store = app.extensions["store"]
     job = store.claim()
     assert job["symbol"] == "RELIANCE.NS"
     assert store.claim() is None
     store.finish(job["id"], result={"summary": "<script>alert(1)</script>"})
-    response = client.get(response.location)
-    assert "&lt;script&gt;" in response.text
-    assert "<script>alert" not in response.text
+    response = client.get(f"/api/jobs/{job['id']}")
+    assert response.mimetype == "application/json"
+    assert response.json["result"]["summary"] == "<script>alert(1)</script>"
     downloaded = client.get(f"/jobs/{job['id']}/download")
     assert "attachment" in downloaded.headers["Content-Disposition"]
 

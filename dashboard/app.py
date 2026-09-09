@@ -1,6 +1,8 @@
 """HTTPS-only, CSRF-protected single-owner research dashboard."""
 
+import base64
 import fcntl
+import hashlib
 import hmac
 import json
 import os
@@ -15,10 +17,9 @@ from flask import (
     Flask,
     Response,
     abort,
-    flash,
     redirect,
-    render_template,
     request,
+    send_from_directory,
     session,
     url_for,
 )
@@ -59,7 +60,7 @@ def create_app(root=None, testing=False):
     def auth():
         return json.loads(auth_path.read_text())
 
-    app = Flask(__name__)
+    app = Flask(__name__, static_folder=None)
     app.config.update(
         SECRET_KEY=auth()["secret"],
         TESTING=testing,
@@ -77,6 +78,17 @@ def create_app(root=None, testing=False):
     )
     # Nginx is the only caller: gunicorn binds to 127.0.0.1, and nginx overwrites these headers.
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+    web_root = Path(os.environ.get("DASHBOARD_WEB_DIR", str(Path(__file__).parent / "web")))
+    script_hashes = []
+    if (web_root / "index.html").exists():
+        for script in re.findall(
+            r"<script(?: [^>]*)?>(.*?)</script>", (web_root / "index.html").read_text(), re.S
+        ):
+            script_hashes.append(
+                "'sha256-"
+                + base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
+                + "'"
+            )
     store = Store(root)
     app.extensions["store"] = store
 
@@ -84,15 +96,31 @@ def create_app(root=None, testing=False):
     def protect():
         if request.endpoint is None:
             return Response("Not found", status=404, mimetype="text/plain")
-        public = request.endpoint in {"login", "static", "health"}
+        public = request.endpoint in {
+            "login",
+            "static",
+            "health",
+            "next_asset",
+            "api_session",
+            "favicon",
+        }
         if not public:
             owner = auth()
             if not session.get("owner"):
+                if request.path.startswith("/api/"):
+                    return {"error": "Sign in to continue.", "redirect": "/login"}, 401
                 return redirect(url_for("login"))
             if session.get("epoch") != owner["epoch"]:
                 session.clear()
+                if request.path.startswith("/api/"):
+                    return {"error": "Session expired.", "redirect": "/login"}, 401
                 return redirect(url_for("login"))
             if owner.get("must_change") and request.endpoint not in {"password", "logout"}:
+                if request.path.startswith("/api/"):
+                    return {
+                        "error": "Change your temporary password.",
+                        "redirect": "/password",
+                    }, 403
                 return redirect(url_for("password"))
         if request.method == "POST":
             token = request.form.get("csrf", "")
@@ -114,6 +142,10 @@ def create_app(root=None, testing=False):
                 "Strict-Transport-Security": "max-age=31536000",
             }
         )
+        if script_hashes:
+            response.headers["Content-Security-Policy"] = response.headers[
+                "Content-Security-Policy"
+            ].replace("script-src 'self'", "script-src 'self' " + " ".join(script_hashes))
         return response
 
     @app.context_processor
@@ -126,6 +158,89 @@ def create_app(root=None, testing=False):
             "today": india_today().isoformat(),
         }
 
+    def shell():
+        context()
+        if not (web_root / "index.html").is_file():
+            return {"error": "Dashboard build is unavailable. Contact the administrator."}, 503
+        return send_from_directory(web_root, "index.html")
+
+    def success(message, destination):
+        if request.accept_mimetypes.best == "application/json":
+            return {"message": message, "redirect": destination}
+        return redirect(destination)
+
+    @app.get("/_next/<path:filename>")
+    def next_asset(filename):
+        return send_from_directory(web_root / "_next", filename)
+
+    @app.get("/api/session")
+    def api_session():
+        if "csrf" not in session:
+            session["csrf"] = secrets.token_urlsafe(32)
+        return {"csrf": session["csrf"], "signed_in": bool(session.get("owner"))}
+
+    @app.get("/api/dashboard")
+    def api_dashboard():
+        config = store.settings()
+        telegram = store.telegram()
+        return {
+            "jobs": store.jobs(),
+            "csrf": context()["csrf_token"],
+            "today": india_today().isoformat(),
+            "settings": {k: v for k, v in config.items() if k != "api_key"},
+            "ready": provider_ready(config),
+            "providers": PROVIDERS,
+            "telegram": {
+                "channel": telegram.get("channel", ""),
+                "enabled": telegram.get("enabled", False),
+                "connected": bool(telegram.get("token")),
+            },
+        }
+
+    @app.get("/api/jobs/<job_id>")
+    def api_job(job_id):
+        from dashboard.presentation import present
+
+        value = store.job(job_id)
+        if value is None:
+            return {"error": "Analysis not found."}, 404
+        return {**value, "view": present(value)}
+
+    @app.post("/api/telegram")
+    def api_telegram():
+        from dashboard.telegram import CHANNEL, TOKEN, send_message
+
+        config = store.telegram()
+        if request.form.get("action") == "test":
+            if store.login_attempt("telegram:test", record=True) > 3:
+                return {"error": "Wait 15 minutes before sending more test messages."}, 429
+            status = send_message(
+                config,
+                "TradingAgents connection test. Channel notifications are ready. No order has been placed.",
+            )
+            return (
+                {"message": "Test message sent."} if status == "sent" else ({"error": status}, 400)
+            )
+        token = request.form.get("token", "").strip() or config.get("token", "")
+        channel = request.form.get("channel", "").strip()
+        enabled = request.form.get("enabled") == "yes"
+        if request.form.get("clear") == "yes":
+            token, enabled = "", False
+        if (
+            (token and not TOKEN.fullmatch(token))
+            or (channel and not CHANNEL.fullmatch(channel))
+            or (enabled and not (token and channel))
+        ):
+            return {
+                "error": "Enter a valid bot token and @channel username or numeric chat ID."
+            }, 400
+        store.save_telegram({"token": token, "channel": channel, "enabled": enabled})
+        return {"message": "Telegram settings saved."}
+
+    @app.get("/favicon.ico")
+    def favicon():
+        return Response(status=204)
+
     @app.get("/healthz")
     def health():
         return {"status": "ok"}
@@ -135,9 +250,7 @@ def create_app(root=None, testing=False):
         if request.method == "POST":
             ip = request.remote_addr or "unknown"
             if store.login_attempt(ip) >= 8:
-                return render_template(
-                    "login.html", error="Too many attempts. Try again in 15 minutes."
-                ), 429
+                return {"error": "Too many attempts. Try again in 15 minutes."}, 429
             owner = auth()
             valid_password = check_password_hash(
                 owner["password_hash"], request.form.get("password", "")
@@ -146,27 +259,22 @@ def create_app(root=None, testing=False):
                 request.form.get("username", "").encode(), owner["username"].encode()
             ):
                 store.login_attempt(ip, record=True)
-                return render_template("login.html", error="Incorrect username or password."), 401
+                return {"error": "Incorrect username or password."}, 401
             store.login_attempt(ip, clear=True)
             session.clear()
             session.update(owner=True, epoch=owner["epoch"])
             session.permanent = True
-            return redirect(url_for("index"))
-        return render_template("login.html")
+            return success("Signed in.", "/password" if owner.get("must_change") else "/")
+        return shell()
 
     @app.post("/logout")
     def logout():
         session.clear()
-        return redirect(url_for("login"))
+        return success("Signed out.", "/login")
 
     @app.get("/")
     def index():
-        return render_template(
-            "index.html",
-            jobs=store.jobs(),
-            ready=provider_ready(store.settings()),
-            codex=store.settings()["provider"] == "codex_cli",
-        )
+        return shell()
 
     @app.post("/jobs")
     def start():
@@ -190,6 +298,8 @@ def create_app(root=None, testing=False):
             job_id = store.enqueue(symbol, parsed.isoformat(), mode)
         except ValueError as exc:
             abort(409, str(exc))
+        if request.accept_mimetypes.best == "application/json":
+            return {"job_id": job_id, "message": "Analysis queued."}, 201
         return redirect(url_for("job", job_id=job_id))
 
     @app.get("/jobs/<job_id>")
@@ -197,7 +307,7 @@ def create_app(root=None, testing=False):
         value = store.job(job_id)
         if value is None:
             abort(404)
-        return render_template("job.html", job=value)
+        return redirect("/?job=" + job_id)
 
     @app.get("/jobs/<job_id>/download")
     def download(job_id):
@@ -233,16 +343,8 @@ def create_app(root=None, testing=False):
             store.save_settings(
                 {"provider": provider, "quick_model": quick, "deep_model": deep, "api_key": key}
             )
-            flash("Model settings saved. API credentials stay on this server.")
-            return redirect(url_for("settings"))
-        public_config = {key: value for key, value in config.items() if key != "api_key"}
-        return render_template(
-            "settings.html",
-            config=public_config,
-            ready=bool(config.get("api_key")),
-            codex_connected=codex_ready(),
-            providers=PROVIDERS,
-        )
+            return success("Model settings saved.", "/settings")
+        return shell()
 
     @app.route("/password", methods=["GET", "POST"])
     def password():
@@ -280,15 +382,14 @@ def create_app(root=None, testing=False):
             session.update(owner=True, epoch=owner["epoch"])
             session.permanent = True
             store.login_attempt(ip, clear=True)
-            flash("Password updated. Other sessions have been signed out.")
-            return redirect(url_for("index"))
-        return render_template("password.html", must_change=owner.get("must_change", False))
+            return success("Password updated. Other sessions have been signed out.", "/")
+        return shell()
 
     @app.errorhandler(400)
     @app.errorhandler(404)
     @app.errorhandler(409)
     @app.errorhandler(429)
     def error(exc):
-        return render_template("error.html", error=exc.description, code=exc.code), exc.code
+        return {"error": exc.description}, exc.code
 
     return app

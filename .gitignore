@@ -222,3 +222,14 @@ __marimo__/
 # Enterprise env file (secrets) and generated run reports
 .env.enterprise
 reports/
+
+# Next.js build output and local credentials
+/frontend/node_modules/
+/frontend/.next/
+/frontend/out/
+/frontend/.env*
+/frontend/test-results/
+/dashboard/web/
+# The upstream lib/ rule must not exclude frontend source utilities.
+!/frontend/lib/
+!/frontend/lib/**

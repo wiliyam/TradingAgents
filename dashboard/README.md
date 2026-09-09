@@ -1,8 +1,9 @@
-# Private Oracle dashboard
+# Next.js dashboard and private Python API
 
 Deployment: **https://at.arkbytetech.com** on the existing Oracle ARM VM.
-This is a custom single-owner web interface around the upstream TradingAgents
-Python engine, with an additional keyless Yahoo Finance snapshot mode.
+The Next.js interface in `frontend/` uses this authenticated Python API and the
+upstream TradingAgents engine, with a keyless Yahoo Finance snapshot mode.
+The previous Jinja dashboard and its assets have been removed.
 
 ## Use
 
@@ -13,13 +14,32 @@ Python engine, with an additional keyless Yahoo Finance snapshot mode.
    the server's saved ChatGPT sign-in and your Codex allowance. No API key is
    needed for this provider. API-based providers remain available in Settings;
    they require their own key and valid model IDs.
-4. Open completed reports from Research history or download their JSON.
+4. Explore Overview, Agents, Signals and History for interactive charts, readable
+   reports, per-agent outputs and JSON export. New runs include OHLC, moving
+   averages and volume history. Older reports retain their saved closing prices.
+5. In Settings, enter a Telegram bot token and @channel username or numeric chat
+   ID. Add the bot as a channel administrator with posting permission. Save,
+   then use **Send test message**. Enable notifications to post each completed
+   analysis summary. Tokens are never returned by the API.
 
 No Angel One integration or live order placement is implemented. There is one
 active analysis at a time, a 20-minute job timeout, and a limit of 24 analyses per
 rolling day. The AI graph uses one debate round and bounded output/retries.
 Historical dates are research dates, not a guarantee of point-in-time data or a
 validated backtest. Daily prices may be delayed and fundamentals/news incomplete.
+
+## Frontend build
+
+```sh
+cd frontend
+npm ci
+npm run build
+```
+
+Copy `frontend/out/` to `/opt/tradingagents/dashboard/web/` and restart the web
+service so CSP hashes match the new build. See `frontend/README.md` for browser
+tests. All pages, including login and password changes, are rendered by Next.js.
+The Flask service serves the build and authenticated API, not Python templates.
 
 ## Server layout
 
@@ -110,3 +130,35 @@ run had stopped at the account's Codex usage limit; the successful retry used
 the same selected model after the allowance became available. The integration
 and login regression suite passes 39 tests. These checks validate operation,
 not financial accuracy or profitability.
+
+## Progress, scoring and notifications
+
+SQLite migrations add progress, integrations and delivery-status tables without
+replacing existing jobs, settings or authentication. Each new AI run saves all
+12 agent outputs as they complete. Failures retain those partial outputs.
+The 0–100 technical checklist awards one of three equal points for price above
+SMA20, price above SMA50, and RSI14 between 50 and 70. Missing inputs produce no
+score. This is not AI confidence, a success probability or a trading strategy.
+
+Telegram uses a bounded HTTPS request after successful research. Delivery failure
+never invalidates the research result. Delivery is not automatically retried, as
+a transport timeout may mean the message was already delivered. Test messages
+are limited to three per 15 minutes. Telegram is disabled until configured.
+
+`python -m dashboard.backfill --state /var/lib/tradingagents/dashboard --logs
+/var/lib/tradingagents/.tradingagents/logs` can restore missing historical debate
+outputs only when the stored symbol, date and all analyst/final reports match.
+Back up SQLite before running migrations or backfills.
+
+## Next.js deployment verification (2026-09-09)
+
+The exported Next.js dashboard is live. The legacy Python templates and assets
+were removed after browser verification. The API suite passes 51 tests; frontend
+utility tests and the desktop/mobile Playwright flow pass. A live market snapshot
+saved 137 bars. A full RELIANCE.NS AI run saved all 12 agent responses, 137 bars
+and 13 distinct progress timestamps. Existing matching debate history was recovered
+for one older report. Source and SQLite were backed up privately before migration.
+
+Telegram token verification succeeded. Initial delivery failed because the saved
+destination was the bot's own username; configure the actual channel and its
+posting permissions in Settings. The UI now provides actionable error messages.

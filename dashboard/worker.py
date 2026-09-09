@@ -63,6 +63,18 @@ def market_snapshot(symbol, day):
         "sma_50": number(close.tail(50).mean()) if len(close) >= 50 else None,
         "rsi_14": number(rsi),
         "volume": number(bars["Volume"].iloc[-1]),
+        "bars": [
+            {
+                "date": stamp.date().isoformat(),
+                **{
+                    key.lower(): number(row[key]) if key in row else None
+                    for key in ("Open", "High", "Low", "Close", "Volume")
+                },
+                "sma20": number(close.rolling(20).mean().loc[stamp]),
+                "sma50": number(close.rolling(50).mean().loc[stamp]),
+            }
+            for stamp, row in bars.iterrows()
+        ],
         "recent_closes": [
             {"date": stamp.date().isoformat(), "close": number(value)}
             for stamp, value in close.tail(20).items()
@@ -72,6 +84,13 @@ def market_snapshot(symbol, day):
 
 def run_analysis(job, settings):
     snapshot = market_snapshot(job["symbol"], job["day"])
+    progress_store = (
+        Store(os.environ["DASHBOARD_STATE_DIR"])
+        if job.get("id") and os.environ.get("DASHBOARD_STATE_DIR")
+        else None
+    )
+    if progress_store:
+        progress_store.progress(job["id"], {"market_snapshot": snapshot})
     if job["mode"] == "snapshot":
         return {"market_snapshot": snapshot}
     provider = settings["provider"]
@@ -94,6 +113,12 @@ def run_analysis(job, settings):
         backend_url=None,
     )
     graph = TradingAgentsGraph(config=config, debug=False)
+    if progress_store:
+        from dashboard.presentation import visible_state
+
+        graph.progress_callback = lambda state: progress_store.progress(
+            job["id"], visible_state(state)
+        )
     state, decision = graph.propagate(job["symbol"], job["day"])
     result = {"market_snapshot": snapshot, "decision_signal": str(decision)}
     if provider == "codex_cli":
@@ -109,6 +134,9 @@ def run_analysis(job, settings):
     ):
         if state.get(key):
             result[key] = str(state[key])[:100000]
+    from dashboard.presentation import visible_state
+
+    result.update(visible_state(state))
     return result
 
 
@@ -142,6 +170,10 @@ def child(root, job_id):
         else:
             error = "AI research could not complete. Verify the ticker, model IDs, API key and provider credit, then retry. A market snapshot can help check data availability."
         store.finish(job_id, error=error)
+    else:
+        from dashboard.telegram import notify_completed
+
+        notify_completed(store, store.job(job_id))
 
 
 def execute(store, job, timeout=1200):
