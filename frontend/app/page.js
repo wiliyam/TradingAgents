@@ -855,7 +855,7 @@ export default function Dashboard() {
               </h1>
               <p>
                 {tab === "Markets"
-                  ? "Your market, in real time."
+                  ? "Angel One market data with separate paper and live account views."
                   : tab === "Overview"
                     ? "Market context, independent perspectives, one research workspace."
                     : tab === "Agents"
@@ -1215,12 +1215,9 @@ export default function Dashboard() {
             </>
           )}
           <footer>
-            Yahoo Finance · Adjusted daily data may be delayed. Historical
-            research is not a validated backtest. AI assessments are not
-            guaranteed outcomes.
+            {tab === "Markets" ? "Angel One · Exchange timestamps indicate quote freshness. Paper fills are simulated." : "Yahoo Finance · Adjusted daily data may be delayed. Historical research is not a validated backtest. AI assessments are not guaranteed outcomes."}
             <br />
-            Automatic trading is disabled. No orders are placed by this
-            dashboard.
+            Automatic trading is disabled. No broker orders are placed by this dashboard.
           </footer>
         </div>
       </main>

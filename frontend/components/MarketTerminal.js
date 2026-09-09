@@ -34,6 +34,18 @@ function LiveChart({ history, tick, interval }) {
       timeScale: {
         timeVisible: true,
         secondsVisible: false,
+        tickMarkFormatter: (t, type) =>
+          new Date(Number(t) * 1000).toLocaleString(
+            "en-IN",
+            type <= 2
+              ? { timeZone: "Asia/Kolkata", day: "2-digit", month: "short" }
+              : {
+                  timeZone: "Asia/Kolkata",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  hour12: false,
+                },
+          ),
         borderColor: "#30414b",
       },
       localization: {
@@ -110,7 +122,14 @@ function LiveChart({ history, tick, interval }) {
   }, [history]);
   useEffect(() => {
     const c = chartRef.current;
-    if (!c || !history || !tick || tick.timestamp <= lastTick.current) return;
+    if (
+      !c ||
+      !history ||
+      !tick ||
+      tick.timestamp <= lastTick.current ||
+      Date.now() / 1000 - tick.timestamp > 15
+    )
+      return;
     const { bar, volume } = applyTick(
       barsRef.current,
       tick,
@@ -200,7 +219,7 @@ export default function MarketTerminal({ api, csrf }) {
     [selected, setSelected] = useState(""),
     [query, setQuery] = useState(""),
     [results, setResults] = useState([]),
-    [interval, setInterval] = useState("5m"),
+    [interval, setChartInterval] = useState("5m"),
     [history, setHistory] = useState(null),
     [mode, setMode] = useState("paper"),
     [accountTab, setAccountTab] = useState("positions"),
@@ -211,11 +230,7 @@ export default function MarketTerminal({ api, csrf }) {
     [message, setMessage] = useState(""),
     [busy, setBusy] = useState(false),
     [chartError, setChartError] = useState("");
-  const latest = useRef(null),
-    selectedRef = useRef("");
-  useEffect(() => {
-    selectedRef.current = selected;
-  }, [selected]);
+  const orderIntent = useRef(null);
   useEffect(() => {
     let alive = true,
       socket,
@@ -223,7 +238,6 @@ export default function MarketTerminal({ api, csrf }) {
     const update = (v) => {
       if (!alive) return;
       setState(v);
-      latest.current = v;
       setSelected((old) =>
         v.watchlist.some((i) => i.key === old)
           ? old
@@ -357,7 +371,6 @@ export default function MarketTerminal({ api, csrf }) {
       setMessage(result.message || "Saved.");
       const v = await api("/api/market/status");
       setState(v);
-      latest.current = v;
       if (operation === "paper-order") setPaper(await api("/api/market/paper"));
       return true;
     } catch (e) {
@@ -378,6 +391,7 @@ export default function MarketTerminal({ api, csrf }) {
     tick = state?.ticks[selected],
     fresh =
       state?.connected &&
+      state.market_session_open !== false &&
       tick &&
       state.server_time - tick.timestamp <= 15 &&
       state.server_time - tick.timestamp >= 0;
@@ -649,7 +663,7 @@ export default function MarketTerminal({ api, csrf }) {
                 <button
                   key={i}
                   className={interval === i ? "selected" : ""}
-                  onClick={() => setInterval(i)}
+                  onClick={() => setChartInterval(i)}
                 >
                   {i}
                 </button>
@@ -697,7 +711,7 @@ export default function MarketTerminal({ api, csrf }) {
           <span className="eyebrow">
             {mode === "paper" ? "SIMULATED EXECUTION" : "BROKER ACCOUNT"}
           </span>
-          <h2>{mode === "paper" ? "Paper order" : "Live account connected"}</h2>
+          <h2>{mode === "paper" ? "Paper order" : "Live account overview"}</h2>
           {mode === "paper" ? (
             <>
               <p>
@@ -714,12 +728,19 @@ export default function MarketTerminal({ api, csrf }) {
                   const fields = Object.fromEntries(
                     new FormData(e.currentTarget),
                   );
-                  await command("paper-order", {
+                  const identity = JSON.stringify({ fields, key: selected });
+                  if (orderIntent.current?.identity !== identity)
+                    orderIntent.current = {
+                      identity,
+                      id: crypto.randomUUID().replaceAll("-", ""),
+                    };
+                  const completed = await command("paper-order", {
                     ...fields,
                     key: selected,
                     mode: "paper",
-                    request_id: crypto.randomUUID().replaceAll("-", ""),
+                    request_id: orderIntent.current.id,
                   });
+                  if (completed) orderIntent.current = null;
                 }}
               >
                 <label>

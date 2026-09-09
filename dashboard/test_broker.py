@@ -69,9 +69,11 @@ def test_paper_ledger_is_idempotent_and_separate(tmp_path):
 def test_market_service_requires_internal_key_and_session(tmp_path):
     import json
     from unittest.mock import Mock
-    from flask import Flask
+
     from fastapi.testclient import TestClient
+    from flask import Flask
     from starlette.websockets import WebSocketDisconnect
+
     from dashboard.broker.service import create_market_app, internal_key
 
     (tmp_path / "auth.json").write_text(
@@ -96,22 +98,26 @@ def test_market_service_requires_internal_key_and_session(tmp_path):
             ).status_code
             == 400
         )
-        with pytest.raises(WebSocketDisconnect):
-            with client.websocket_connect(
+        with (
+            pytest.raises(WebSocketDisconnect),
+            client.websocket_connect(
                 "/api/market/stream", headers={"origin": "http://127.0.0.1:8051"}
-            ):
-                pass
+            ),
+        ):
+            pass
         app = Flask("fixture")
         app.secret_key = "fixture-secret"
         token = app.session_interface.get_signing_serializer(app).dumps(
             {"owner": True, "epoch": "one"}
         )
-        with pytest.raises(WebSocketDisconnect):
-            with client.websocket_connect(
+        with (
+            pytest.raises(WebSocketDisconnect),
+            client.websocket_connect(
                 "/api/market/stream",
                 headers={"origin": "https://evil.example", "cookie": "session=" + token},
-            ):
-                pass
+            ),
+        ):
+            pass
         with client.websocket_connect(
             "/api/market/stream",
             headers={"origin": "http://127.0.0.1:8051", "cookie": "session=" + token},
@@ -121,6 +127,7 @@ def test_market_service_requires_internal_key_and_session(tmp_path):
 
 def test_broker_errors_never_expose_credentials(tmp_path, monkeypatch):
     import requests
+
     from dashboard.broker.engine import MarketEngine
 
     engine = MarketEngine(tmp_path)
@@ -163,3 +170,70 @@ def test_watchlist_and_live_orders_are_bounded(tmp_path):
         engine.watch("NSE:50", "add")
     with pytest.raises(BrokerError):
         engine.paper_order({"key": "NSE:0", "mode": "live"})
+
+
+def test_obsolete_socket_cannot_resume_after_disconnect(tmp_path):
+    from unittest.mock import Mock
+
+    from dashboard.broker.engine import MarketEngine
+
+    engine = MarketEngine(tmp_path)
+    engine.credentials = {"api_key": "fixture", "client_code": "fixture"}
+    engine.session = {"jwtToken": "fixture", "feedToken": "fixture"}
+    engine.want_connection = True
+    socket = engine._make_socket(engine.generation, dict(engine.credentials), dict(engine.session))
+    socket.close = Mock()
+    engine.socket = socket
+    engine.watchlist = [{"key": "NSE:2885", "exchange": "NSE", "token": "2885"}]
+    engine.disconnect()
+    socket.on_open(socket)
+    socket.on_message(socket, packet())
+    assert engine.connected is False
+    assert engine.ticks == {}
+    assert engine.want_connection is False
+    assert socket.close.call_count == 2
+
+
+def test_disconnect_wins_over_inflight_login(tmp_path, monkeypatch):
+    import threading
+
+    from dashboard.broker.engine import MarketEngine
+
+    engine = MarketEngine(tmp_path)
+    engine.credentials = {"api_key": "fixture", "client_code": "fixture", "password": "fixture"}
+    started = threading.Event()
+    release = threading.Event()
+
+    def request(*args, **kwargs):
+        started.set()
+        assert release.wait(3)
+        return {"jwtToken": "fixture", "feedToken": "fixture"}
+
+    monkeypatch.setattr(engine, "_request", request)
+    login = threading.Thread(target=engine.connect, args=("123456",))
+    login.start()
+    assert started.wait(3)
+    disconnect = threading.Thread(target=engine.disconnect)
+    disconnect.start()
+    release.set()
+    login.join(3)
+    disconnect.join(3)
+    assert not login.is_alive() and not disconnect.is_alive()
+    assert engine.want_connection is False
+    assert engine.session == {}
+    assert engine.connected is False
+
+
+def test_connection_timeout_is_not_reported_as_bad_credentials(tmp_path, monkeypatch):
+    import requests
+
+    from dashboard.broker.engine import MarketEngine
+    engine = MarketEngine(tmp_path)
+    engine.credentials = {"api_key": "private-key", "client_code": "client", "password": "private-pin"}
+    def fail(*args, **kwargs):
+        raise requests.ConnectTimeout("private-key private-pin")
+    monkeypatch.setattr(requests, "request", fail)
+    with pytest.raises(BrokerError, match="credentials have not been validated") as error:
+        engine.connect("123456")
+    assert "private-key" not in str(error.value)
+    assert "private-pin" not in str(error.value)

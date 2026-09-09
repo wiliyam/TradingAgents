@@ -1,6 +1,7 @@
 """Single shared Angel One feed; private credentials and read-only broker REST calls."""
 
 import json
+import math
 import os
 import re
 import tempfile
@@ -47,6 +48,8 @@ class MarketEngine:
         )
         self.watchlist = json.loads(self.watch_path.read_text()) if self.watch_path.exists() else []
         self.session = {}
+        self.generation = 0
+        self.wake_event = threading.Event()
         self.login_at = 0
         self.ticks = {}
         self.catalog = {}
@@ -68,10 +71,25 @@ class MarketEngine:
         self.thread = threading.Thread(target=self._feed_loop, daemon=True)
         self.thread.start()
 
+    def _invalidate(self):
+        """Called under self.lock; callbacks from older generations become inert."""
+        self.generation += 1
+        socket = self.socket
+        self.socket = None
+        self.connected = False
+        self.session = {}
+        self.ticks = {}
+        self.cache = {}
+        self.wake_event.set()
+        return socket
+
     def stop(self):
         self.stop_event.set()
-        if self.socket:
-            self.socket.close()
+        with self.lock:
+            self.want_connection = False
+            socket = self._invalidate()
+        if socket:
+            socket.close()
         if self.thread:
             self.thread.join(timeout=5)
 
@@ -88,22 +106,18 @@ class MarketEngine:
                 value = {}
             if value.get("totp_secret"):
                 try:
-                    pyotp.TOTP(value["totp_secret"].replace(" ", "")).now()
+                    pyotp.TOTP(value["totp_secret"]).now()
                 except Exception:
-                    raise BrokerError(
-                        "Invalid authenticator secret. Enter the setup secret, or leave it empty and use a one-time code."
-                    ) from None
-            self.want_connection = False
-            if self.socket:
-                self.socket.close()
+                    raise BrokerError("Invalid authenticator setup secret.") from None
+            value["auto_connect"] = False
+            atomic_json(self.credentials_path, value)
             with self.lock:
-                self.connected = False
-                self.session = {}
-                self.ticks = {}
-                self.cache = {}
+                self.want_connection = False
+                socket = self._invalidate()
                 self.credentials = value
-                value["auto_connect"] = False
-                atomic_json(self.credentials_path, value)
+                self.error = ""
+            if socket:
+                socket.close()
         return {"message": "Angel One credentials saved privately. Connect to start the feed."}
 
     def _request(self, path, body=None, authenticated=True):
@@ -115,6 +129,7 @@ class MarketEngine:
             with self.lock:
                 c = dict(self.credentials)
                 session = dict(self.session)
+                generation = self.generation
             if authenticated and not session.get("jwtToken"):
                 raise BrokerError("Connect your Angel One account first.")
             headers = {
@@ -142,10 +157,18 @@ class MarketEngine:
                     raise BrokerError("Angel One is rate-limiting requests. Wait and try again.")
                 r.raise_for_status()
                 v = r.json()
+            except requests.ConnectTimeout:
+                raise BrokerError(
+                    "The server could not reach Angel One (connection timed out). "
+                    "Your credentials have not been validated. Check broker network access from this server."
+                ) from None
             except (requests.RequestException, ValueError):
                 raise BrokerError(
                     "Angel One request failed. Check API access, connection and the registered server IP."
                 ) from None
+            with self.lock:
+                if generation != self.generation:
+                    raise BrokerError("The account connection changed. Please retry.")
             if not v.get("status"):
                 code = v.get("errorcode", "")
                 if code in ("AG8001", "AG8002", "AG8003", "AB1010"):
@@ -162,9 +185,12 @@ class MarketEngine:
                 )
             return v.get("data")
 
-    def connect(self, totp=""):
+    def connect(self, totp="", automatic=False):
         with self.login_lock:
-            c = self.credentials
+            with self.lock:
+                if self.stop_event.is_set() or (automatic and not self.want_connection):
+                    return {"message": "Feed disconnected."}
+                c = dict(self.credentials)
             if not all(c.get(k) for k in ("api_key", "client_code", "password")):
                 raise BrokerError("Save your API key, client code and PIN/password first.")
             code = totp or (pyotp.TOTP(c["totp_secret"]).now() if c.get("totp_secret") else "")
@@ -179,27 +205,31 @@ class MarketEngine:
             )
             if not result or not result.get("jwtToken") or not result.get("feedToken"):
                 raise BrokerError("Angel One returned an incomplete session.")
-            if self.socket:
-                self.socket.close()
             with self.lock:
+                if self.stop_event.is_set():
+                    raise BrokerError("Market service is stopping. Try again shortly.")
+                socket = self._invalidate()
                 self.session = {k: result[k] for k in ("jwtToken", "feedToken")}
                 self.login_at = time.time()
                 self.error = ""
                 self.want_connection = True
-                self.cache = {}
                 self.credentials["auto_connect"] = bool(c.get("totp_secret"))
                 atomic_json(self.credentials_path, self.credentials)
+            if socket:
+                socket.close()
         return {"message": "Angel One authenticated. Establishing the market feed."}
 
     def disconnect(self):
-        self.want_connection = False
-        if self.socket:
-            self.socket.close()
-        with self.lock:
-            self.session = {}
-            self.connected = False
-            self.credentials["auto_connect"] = False
-            atomic_json(self.credentials_path, self.credentials)
+        # Wait for an in-flight login, then invalidate its result and socket.
+        with self.login_lock:
+            with self.lock:
+                self.want_connection = False
+                socket = self._invalidate()
+                self.credentials["auto_connect"] = False
+                self.error = ""
+                atomic_json(self.credentials_path, self.credentials)
+            if socket:
+                socket.close()
         return {"message": "Feed disconnected. Broker orders were not changed."}
 
     def _catalog(self):
@@ -305,81 +335,127 @@ class MarketEngine:
                 )
             )
 
+    def _make_socket(self, generation, credentials, session):
+        def current(ws):
+            return (
+                self.want_connection
+                and self.generation == generation
+                and self.socket is ws
+                and not self.stop_event.is_set()
+            )
+
+        def opened(ws):
+            with self.lock:
+                valid = current(ws)
+                if valid:
+                    self.connected = True
+                    self.error = ""
+                    items = list(self.watchlist)
+            if not valid:
+                ws.close()
+                return
+            self._subscription(ws, items)
+
+        def received(ws, message):
+            tick = parse_tick(message)
+            if tick:
+                with self.lock:
+                    if current(ws) and tick["key"] in {i["key"] for i in self.watchlist}:
+                        old = self.ticks.get(tick["key"])
+                        if not old or tick["timestamp"] >= old["timestamp"]:
+                            self.ticks[tick["key"]] = tick
+
+        def failed(ws, *_):
+            with self.lock:
+                if current(ws):
+                    self.connected = False
+                    self.error = "Market feed disconnected. Reconnecting…"
+
+        return websocket.WebSocketApp(
+            "wss://smartapisocket.angelone.in/smart-stream",
+            header={
+                "Authorization": session["jwtToken"],
+                "x-api-key": credentials["api_key"],
+                "x-client-code": credentials["client_code"],
+                "x-feed-token": session["feedToken"],
+            },
+            on_open=opened,
+            on_message=received,
+            on_error=failed,
+            on_close=failed,
+        )
+
     def _feed_loop(self):
         retry = 3
         while not self.stop_event.is_set():
-            if not self.want_connection:
-                self.stop_event.wait(1)
+            with self.lock:
+                wanted = self.want_connection
+                generation = self.generation
+            if not wanted:
+                self.wake_event.wait(1)
+                self.wake_event.clear()
                 continue
             try:
                 if not self.session or time.time() - self.login_at > 18 * 3600:
-                    self.connect()
+                    self.connect(automatic=True)
                 with self.lock:
-                    c = dict(self.credentials)
-                    s = dict(self.session)
-
-                def opened(ws):
-                    with self.lock:
-                        self.connected = True
-                        self.error = ""
-                        items = list(self.watchlist)
-                    self._subscription(ws, items)
-
-                def received(ws, message):
-                    tick = parse_tick(message)
-                    if tick:
-                        with self.lock:
-                            if tick["key"] in {i["key"] for i in self.watchlist}:
-                                old = self.ticks.get(tick["key"])
-                                if not old or tick["timestamp"] >= old["timestamp"]:
-                                    self.ticks[tick["key"]] = tick
-
-                def failed(*_):
-                    with self.lock:
-                        self.connected = False
-                        self.error = "Market feed disconnected. Reconnecting…"
-
-                self.socket = websocket.WebSocketApp(
-                    "wss://smartapisocket.angelone.in/smart-stream",
-                    header={
-                        "Authorization": s["jwtToken"],
-                        "x-api-key": c["api_key"],
-                        "x-client-code": c["client_code"],
-                        "x-feed-token": s["feedToken"],
-                    },
-                    on_open=opened,
-                    on_message=received,
-                    on_error=failed,
-                    on_close=failed,
-                )
-                # websocket-client validates TLS certificates by default. Never disable this.
+                    if not self.want_connection or not self.session:
+                        continue
+                    generation = self.generation
+                    credentials, session = dict(self.credentials), dict(self.session)
+                socket = self._make_socket(generation, credentials, session)
+                with self.lock:
+                    if generation != self.generation or not self.want_connection:
+                        continue
+                    self.socket = socket
                 heartbeat_stop = threading.Event()
 
-                def heartbeat():
-                    while not heartbeat_stop.wait(10):
+                def heartbeat(event=heartbeat_stop, ws=socket, expected=generation):
+                    while not event.wait(10):
+                        with self.lock:
+                            valid = (
+                                self.generation == expected
+                                and self.want_connection
+                                and self.socket is ws
+                                and self.connected
+                            )
+                        if not valid:
+                            continue
                         try:
-                            if self.socket and self.connected:
-                                self.socket.send("ping")
+                            ws.send("ping")
                         except Exception:
                             return
 
                 threading.Thread(target=heartbeat, daemon=True).start()
                 try:
-                    self.socket.run_forever(ping_interval=20, ping_timeout=10)
+                    # TLS certificate verification remains enabled.
+                    socket.run_forever(ping_interval=20, ping_timeout=10)
                 finally:
                     heartbeat_stop.set()
+                    with self.lock:
+                        if self.socket is socket:
+                            self.socket = None
+                            self.connected = False
                 retry = min(60, retry * 2)
             except BrokerError as exc:
-                self.error = str(exc)
+                with self.lock:
+                    if self.generation == generation and self.want_connection:
+                        self.error = str(exc)
+                        if not self.credentials.get("totp_secret"):
+                            self.want_connection = False
                 retry = 60
-                if not self.credentials.get("totp_secret"):
-                    self.want_connection = False
             except Exception:
-                self.error = "Market feed unavailable. Reconnecting…"
+                with self.lock:
+                    if self.generation == generation and self.want_connection:
+                        self.error = "Market feed unavailable. Reconnecting…"
                 retry = 30
-            with self.lock:
-                self.connected = False
-            self.stop_event.wait(retry)
+            self.wake_event.wait(retry)
+            self.wake_event.clear()
+
+    @staticmethod
+    def session_open():
+        now = datetime.now(ZoneInfo("Asia/Kolkata"))
+        return now.weekday() < 5 and 555 <= now.hour * 60 + now.minute < 930
 
     def status(self):
         with self.lock:
@@ -399,6 +475,7 @@ class MarketEngine:
                 "server_time": time.time(),
                 "real_orders_enabled": False,
                 "max_watchlist": 50,
+                "market_session_open": self.session_open(),
             }
 
     def candles(self, key, interval):
@@ -433,7 +510,7 @@ class MarketEngine:
                 values = [float(v) for v in row[1:6]]
                 if (
                     len(values) != 5
-                    or not all(__import__("math").isfinite(v) for v in values)
+                    or not all(math.isfinite(v) for v in values)
                     or ts > now.timestamp()
                 ):
                     continue
@@ -479,6 +556,10 @@ class MarketEngine:
         return result
 
     def paper_order(self, order):
+        if not self.session_open():
+            raise BrokerError(
+                "Paper orders require the regular equity session, 09:15–15:30 IST on weekdays, and fresh exchange quotes."
+            )
         instrument = self.instrument(order.get("key", ""))
         if instrument.get("kind") == "index":
             raise BrokerError("Indices cannot be traded as equity shares.")

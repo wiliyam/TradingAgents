@@ -129,6 +129,8 @@ def create_app(root=None, testing=False):
             ):
                 abort(400, "The form expired. Reload the page and try again.")
 
+    # The sole inline style hash is Lightweight Charts 5.2.1 attribution-logo CSS.
+    # Keep the library pinned and browser-test this policy after upgrades.
     @app.after_request
     def headers(response):
         response.headers.update(
@@ -138,7 +140,7 @@ def create_app(root=None, testing=False):
                 "X-Frame-Options": "DENY",
                 "Referrer-Policy": "no-referrer",
                 "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-                "Content-Security-Policy": "default-src 'self'; connect-src 'self' wss://at.arkbytetech.com; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+                "Content-Security-Policy": "default-src 'self'; connect-src 'self' wss://at.arkbytetech.com; script-src 'self'; style-src 'self' 'sha256-3pRED1tOXas1FXFoPb9TGCjmYe9XQsmO9OV23khV2nY='; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
                 "Strict-Transport-Security": "max-age=31536000",
             }
         )

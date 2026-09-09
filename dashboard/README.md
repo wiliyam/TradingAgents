@@ -22,7 +22,8 @@ The previous Jinja dashboard and its assets have been removed.
    then use **Send test message**. Enable notifications to post each completed
    analysis summary. Tokens are never returned by the API.
 
-No Angel One integration or live order placement is implemented. There is one
+The Markets tab integrates Angel One market data and read-only live account views.
+Paper orders use an isolated simulated ledger; live order placement is disabled. There is one
 active analysis at a time, a 20-minute job timeout, and a limit of 24 analyses per
 rolling day. The AI graph uses one debate round and bounded output/retries.
 Historical dates are research dates, not a guarantee of point-in-time data or a
@@ -162,3 +163,28 @@ for one older report. Source and SQLite were backed up privately before migratio
 Telegram token verification succeeded. Initial delivery failed because the saved
 destination was the bot's own username; configure the actual channel and its
 posting permissions in Settings. The UI now provides actionable error messages.
+
+
+## Angel One Markets
+
+Markets → Connect / settings accepts a SmartAPI key, client code, PIN/password,
+and either a current TOTP at connection time or a saved TOTP setup secret for
+reconnection. Credentials stay in owner-only `angel-private.json` on the server;
+API responses do not disclose them. Never commit credentials.
+
+The isolated `.broker-venv` runs `tradingagents-market.service` on loopback 8060.
+Install `dashboard/broker/requirements.txt` into that environment. Nginx routes
+only the authenticated `/api/market/stream` WebSocket to it. HTTP commands pass
+through the existing CSRF-protected API with an internal HMAC key. One broker
+WebSocket serves up to 50 selected NSE/BSE instruments; search uses the public
+instrument catalog. Charts include historical candles, volume and SMA 20.
+
+Paper trading starts with INR 1,000,000 in `paper.sqlite3`, separate from real
+funds. Fills require recent exchange quotes during regular market hours and
+support long-only buys/sells; fees and slippage are not simulated. Live funds,
+holdings, positions and orders are read-only. No broker order endpoint exists.
+
+A network connection timeout occurs before credentials can be validated. On
+2026-09-09, the Oracle deployment could serve the dashboard and its browser
+WebSocket, but connections from the VM to Angel One's REST endpoint timed out.
+Broker authentication and live ticks therefore remain unverified on that host.

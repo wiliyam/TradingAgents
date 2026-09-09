@@ -11,7 +11,7 @@ Environment=HOME=/var/lib/tradingagents
 Environment=DASHBOARD_STATE_DIR=/var/lib/tradingagents/dashboard
 Environment=ANGEL_PUBLIC_IP=192.9.166.69
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/opt/tradingagents/.venv/bin/uvicorn dashboard.broker.service:create_market_app --factory --host 127.0.0.1 --port 8060 --workers 1 --no-access-log --ws-max-size 16384
+ExecStart=/opt/tradingagents/.broker-venv/bin/uvicorn dashboard.broker.service:create_market_app --factory --host 127.0.0.1 --port 8060 --workers 1 --no-access-log --ws-max-size 16384
 Restart=on-failure
 RestartSec=5
 UMask=0077

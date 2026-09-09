@@ -10,6 +10,7 @@ import re
 import sqlite3
 import struct
 import time
+from contextlib import closing
 from pathlib import Path
 
 
@@ -60,7 +61,7 @@ class PaperLedger:
     def __init__(self, root):
         self.path = Path(root) / "paper.sqlite3"
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with self.db() as db:
+        with closing(self.db()) as db, db:
             db.executescript("""PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS wallet(id INTEGER PRIMARY KEY CHECK(id=1),cash INTEGER NOT NULL);
             INSERT OR IGNORE INTO wallet VALUES(1,100000000);
