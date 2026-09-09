@@ -1,0 +1,38 @@
+[Unit]
+Description=TradingAgents research queue worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=tradingagents
+Group=tradingagents
+WorkingDirectory=/opt/tradingagents
+Environment=HOME=/var/lib/tradingagents
+Environment=DASHBOARD_STATE_DIR=/var/lib/tradingagents/dashboard
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=OMP_NUM_THREADS=1
+Environment=ANONYMIZED_TELEMETRY=False
+Environment=LANGCHAIN_TRACING_V2=false
+ExecStart=/opt/tradingagents/.venv/bin/python -m dashboard.worker
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/tradingagents
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+MemoryMax=3G
+TasksMax=128
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target
