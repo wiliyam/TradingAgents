@@ -138,7 +138,7 @@ def create_app(root=None, testing=False):
                 "X-Frame-Options": "DENY",
                 "Referrer-Policy": "no-referrer",
                 "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-                "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+                "Content-Security-Policy": "default-src 'self'; connect-src 'self' wss://at.arkbytetech.com; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
                 "Strict-Transport-Security": "max-age=31536000",
             }
         )
@@ -178,6 +178,35 @@ def create_app(root=None, testing=False):
         if "csrf" not in session:
             session["csrf"] = secrets.token_urlsafe(32)
         return {"csrf": session["csrf"], "signed_in": bool(session.get("owner"))}
+
+    @app.route("/api/market/<operation>", methods=["GET", "POST"])
+    def market_proxy(operation):
+        import requests as http
+
+        # Only explicit read operations and simulated orders are exposed.
+        reads = {"status", "search", "candles", "portfolio", "paper"}
+        writes = {"configure", "connect", "disconnect", "watch", "paper-order"}
+        if operation not in (reads if request.method == "GET" else writes):
+            return {"error": "Unsupported operation. Real-money orders are disabled."}, 404
+        key = hmac.new(
+            auth()["secret"].encode(), b"arkbyte-market-service-v1", hashlib.sha256
+        ).hexdigest()
+        path = operation if request.method == "GET" else "command/" + operation
+        try:
+            response = http.request(
+                request.method,
+                "http://127.0.0.1:8060/" + path,
+                headers={"X-Market-Key": key},
+                params=request.args if request.method == "GET" else None,
+                json={k: v for k, v in request.form.items() if k != "csrf"}
+                if request.method == "POST"
+                else None,
+                timeout=(3, 48),
+            )
+            value = response.json()
+            return value, response.status_code
+        except (http.RequestException, ValueError):
+            return {"error": "The market service is unavailable. Try again shortly."}, 503
 
     @app.get("/api/dashboard")
     def api_dashboard():

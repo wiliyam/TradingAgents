@@ -2,10 +2,12 @@
 import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import MarketTerminal from "../components/MarketTerminal";
 import { number, tone, readable, chartBars } from "../lib/research.mjs";
 
 const icon = {
   Overview: "◈",
+  Markets: "▥",
   Agents: "◎",
   Signals: "↗",
   History: "◷",
@@ -839,26 +841,30 @@ export default function Dashboard() {
             <div>
               <span className="eyebrow">MULTI-AGENT INTELLIGENCE</span>
               <h1>
-                {tab === "Overview"
-                  ? "A clearer view of your next move."
-                  : tab === "Agents"
-                    ? "Inside the research team."
-                    : tab === "Signals"
-                      ? "From evidence to assessment."
-                      : tab === "History"
-                        ? "Your research, preserved."
-                        : "Your workspace, connected."}
+                {tab === "Markets"
+                  ? "Your market, in real time."
+                  : tab === "Overview"
+                    ? "A clearer view of your next move."
+                    : tab === "Agents"
+                      ? "Inside the research team."
+                      : tab === "Signals"
+                        ? "From evidence to assessment."
+                        : tab === "History"
+                          ? "Your research, preserved."
+                          : "Your workspace, connected."}
               </h1>
               <p>
-                {tab === "Overview"
-                  ? "Market context, independent perspectives, one research workspace."
-                  : tab === "Agents"
-                    ? "Explore each analyst, the opposing arguments, and the final risk review."
-                    : tab === "Signals"
-                      ? "Inspect the proposal and the evidence behind the final rating."
-                      : tab === "History"
-                        ? "Reopen previous analyses, compare dates, and download reports."
-                        : "Manage models, channel notifications, and account security."}
+                {tab === "Markets"
+                  ? "Your market, in real time."
+                  : tab === "Overview"
+                    ? "Market context, independent perspectives, one research workspace."
+                    : tab === "Agents"
+                      ? "Explore each analyst, the opposing arguments, and the final risk review."
+                      : tab === "Signals"
+                        ? "Inspect the proposal and the evidence behind the final rating."
+                        : tab === "History"
+                          ? "Reopen previous analyses, compare dates, and download reports."
+                          : "Manage models, channel notifications, and account security."}
               </p>
             </div>
             <Badge kind="positive">● Private terminal</Badge>
@@ -883,7 +889,9 @@ export default function Dashboard() {
               ◌ {active.symbol} · {active.status} — open live agent progress →
             </button>
           )}
-          {tab === "Settings" ? (
+          {tab === "Markets" ? (
+            <MarketTerminal api={api} csrf={csrf} />
+          ) : tab === "Settings" ? (
             <Settings data={data} submit={submit} busy={busy} />
           ) : tab === "History" ? (
             <section className="panel">
