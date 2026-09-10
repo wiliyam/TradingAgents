@@ -68,6 +68,10 @@ class PaperLedger:
             CREATE TABLE IF NOT EXISTS positions(key TEXT PRIMARY KEY,symbol TEXT,exchange TEXT,token TEXT,quantity INTEGER,cost INTEGER);
             CREATE TABLE IF NOT EXISTS trades(id TEXT PRIMARY KEY,created REAL,key TEXT,symbol TEXT,side TEXT,quantity INTEGER,price INTEGER,realized INTEGER);
             """)
+        from dashboard.broker import risk
+
+        with closing(self.db()) as db, db:
+            risk.setup(db)
         os.chmod(self.path, 0o600)
 
     def db(self):
@@ -119,6 +123,9 @@ class PaperLedger:
                 held = row["quantity"] if row else 0
                 cost = row["cost"] if row else 0
                 total = quantity * price
+                from dashboard.broker import risk
+
+                risk.check(db, side, total, cost)
                 realized = 0
                 if side == "BUY":
                     if total > cash:
@@ -151,6 +158,17 @@ class PaperLedger:
                 db.execute(
                     "INSERT INTO trades VALUES(?,?,?,?,?,?,?,?)",
                     (request_id, now, key, instrument["symbol"], side, quantity, price, realized),
+                )
+                risk.event(
+                    db,
+                    "paper_fill",
+                    {
+                        "id": request_id,
+                        "key": key,
+                        "side": side,
+                        "quantity": quantity,
+                        "price": price / 100,
+                    },
                 )
                 return dict(db.execute("SELECT * FROM trades WHERE id=?", (request_id,)).fetchone())
         finally:
@@ -200,3 +218,25 @@ class PaperLedger:
             }
         finally:
             db.close()
+
+    def set_risk(self, fields):
+        from dashboard.broker import risk
+
+        with closing(self.db()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            return risk.update(db, fields)
+
+    def risk(self):
+        from dashboard.broker import risk
+
+        with closing(self.db()) as db:
+            return risk.read(db)
+
+    def audit(self):
+        import json
+
+        with closing(self.db()) as db:
+            return [
+                {**dict(r), "detail": json.loads(r["detail"])}
+                for r in db.execute("SELECT * FROM audit_events ORDER BY id DESC LIMIT 200")
+            ]

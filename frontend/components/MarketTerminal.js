@@ -7,6 +7,7 @@ import {
   LineSeries,
   ColorType,
 } from "lightweight-charts";
+import AutomationPanel from "./AutomationPanel";
 import { number } from "../lib/research.mjs";
 import { applyTick } from "../lib/live-chart.mjs";
 
@@ -910,6 +911,7 @@ export default function MarketTerminal({ api, csrf }) {
           </p>
         )}
       </section>
+      <AutomationPanel api={api} csrf={csrf} instrumentKey={selected} />
     </div>
   );
 }

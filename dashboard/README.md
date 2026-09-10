@@ -188,3 +188,52 @@ A network connection timeout occurs before credentials can be validated. On
 2026-09-09, the Oracle deployment could serve the dashboard and its browser
 WebSocket, but connections from the VM to Angel One's REST endpoint timed out.
 Broker authentication and live ticks therefore remain unverified on that host.
+
+## Paper automation release
+
+Open Markets → Strategy lab & controls. Save an intraday SMA strategy using a
+watchlist instrument, fast/slow periods and quantity. Saved strategies are paused;
+start explicitly after connecting the broker feed. The runner checks every 15
+seconds, evaluates completed candles, and uses fresh LTP for simulated fills.
+A strategy enters only when flat and fast SMA exceeds slow SMA; it exits held
+shares when fast SMA is lower. One running strategy per instrument is allowed.
+Strategies manage that instrument's shared paper position, including manual buys.
+Restarting the service pauses all strategies. Daily bars are backtest-only until
+an exchange session/holiday calendar is integrated.
+
+Risk settings apply inside the same SQLite transaction as each manual or
+strategy fill: order value, position cost, total invested cost, daily order count,
+and daily realized-loss limit. The loss limit blocks buys, not exits, and does not
+measure unrealized losses. Limits use IST calendar days. The kill switch blocks
+all new fills and pauses strategies; it does not liquidate positions. Releasing
+it does not restart strategies. Deterministic strategy/bar order references make
+retries idempotent. Audit events record fills, evaluations, strategy controls and
+risk changes. The dashboard exports the latest 200 audit entries; the database
+retains the full append-only application history (not tamper-proof storage).
+
+Historical simulation uses a signal from completed bars and fills on the next
+bar's open with configurable per-side fee/slippage basis points. Open positions
+are marked at the final close. Equity, drawdown, fees and fills are charted and
+exported with strategy configuration, source and candle-data SHA-256. Import up
+to 12 KB of OHLC JSON for offline simulations; broker history requires a working
+connection. The database retains 20 simulations and the UI shows the latest 10.
+Imported data is not independently verified; simulations do not model liquidity,
+corporate actions, detailed Indian charges, or live execution. Paper LTP fills
+currently exclude fees and slippage, unlike configurable backtests.
+
+### Release checks and operating limits
+
+The system remains a single-owner paper platform, not a certified production
+broker execution system. Real-order endpoints do not exist. Live feed operation
+from the Oracle server remains blocked by the Angel One network timeout.
+Before enabling real trading, separate work is required for broker reconciliation,
+exchange calendars, order lifecycle/partial fills, position-based stops, detailed
+transaction costs, resilient execution hosting, disaster recovery drills and
+applicable broker/exchange approvals. AI research never submits trades.
+
+Before upgrades, take SQLite online backups (`sqlite3.Connection.backup`) of both
+`dashboard.sqlite3` and `paper.sqlite3`, and keep private authentication/config
+files in a restricted backup directory. Restore only with web, worker and market
+services stopped; restore both state databases and matching private configuration,
+then start services and check balances, positions, audit history and paused
+strategies. Do not copy active database files without their WAL or an online backup.

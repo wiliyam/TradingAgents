@@ -1390,3 +1390,59 @@ footer {
     grid-template-columns: 1fr;
   }
 }
+
+.automation-panel {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding: 24px;
+}
+.automation-panel details {
+  border-top: 1px solid #30414b;
+  padding: 16px 0;
+}
+.automation-panel summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+.automation-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.automation-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.automation-panel textarea {
+  width: 100%;
+  max-width: 100%;
+}
+.automation-panel .table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.automation-panel td {
+  max-width: 380px;
+  overflow-wrap: anywhere;
+}
+.automation-panel button {
+  margin: 4px;
+}
+.automation-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+.equity-curve {
+  display: block;
+  width: 100%;
+  max-height: 280px;
+  color: #9babb5;
+}
+.danger-button {
+  color: #ff9c9c;
+  border: 1px solid #ae5353;
+}

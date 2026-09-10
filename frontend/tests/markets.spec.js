@@ -41,6 +41,21 @@ test("market workspace streams prices and separates paper/live actions", async (
   await page.route("**/api/market/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     let data = {};
+    if (path.endsWith("/automation"))
+      data = {
+        strategies: [],
+        backtests: [],
+        audit: [],
+        heartbeat: now,
+        risk: {
+          halted: false,
+          max_order_value: 250000,
+          max_position_cost: 500000,
+          max_invested_capital: 1000000,
+          max_daily_realized_loss: 10000,
+          max_daily_orders: 100,
+        },
+      };
     if (path.endsWith("/status")) data = state;
     if (path.endsWith("/search")) data = { instruments: [item] };
     if (path.endsWith("/paper"))

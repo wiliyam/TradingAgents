@@ -65,9 +65,13 @@ class MarketEngine:
         self.thread = None
         self.want_connection = bool(self.credentials.get("auto_connect"))
         self.ledger = PaperLedger(root)
+        from dashboard.broker.automation import Automation
+
+        self.automation = Automation(self)
         self.cache = {}
 
     def start(self):
+        self.automation.start()
         self.thread = threading.Thread(target=self._feed_loop, daemon=True)
         self.thread.start()
 
@@ -84,6 +88,7 @@ class MarketEngine:
         return socket
 
     def stop(self):
+        self.automation.stop()
         self.stop_event.set()
         with self.lock:
             self.want_connection = False

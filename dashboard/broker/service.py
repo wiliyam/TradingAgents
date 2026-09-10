@@ -62,6 +62,10 @@ def create_market_app(root=None, engine=None, testing=False):
     async def validation_error(request, exc):
         return JSONResponse({"error": "Invalid request fields."}, status_code=400)
 
+    @app.get("/automation")
+    def automation():
+        return engine.automation.state()
+
     @app.get("/status")
     def status():
         return engine.status()
@@ -84,6 +88,21 @@ def create_market_app(root=None, engine=None, testing=False):
 
     @app.post("/command/{action}")
     def command(action: str, payload: dict):
+        if action == "backtest":
+            return engine.automation.run_backtest(payload)
+        if action in (
+            "strategy-save",
+            "strategy-start",
+            "strategy-pause",
+            "strategy-delete",
+            "halt",
+            "risk",
+        ):
+            if action == "risk" and "halted" in payload:
+                if payload["halted"] not in ("true", "false", True, False):
+                    raise BrokerError("Invalid halt state.")
+                payload["halted"] = payload["halted"] in ("true", True)
+            return engine.automation.command(action, payload)
         if action == "configure":
             return engine.configure(payload)
         if action == "connect":

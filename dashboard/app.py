@@ -186,8 +186,8 @@ def create_app(root=None, testing=False):
         import requests as http
 
         # Only explicit read operations and simulated orders are exposed.
-        reads = {"status", "search", "candles", "portfolio", "paper"}
-        writes = {"configure", "connect", "disconnect", "watch", "paper-order"}
+        reads = {"status", "search", "candles", "portfolio", "paper", "automation"}
+        writes = {"configure", "connect", "disconnect", "watch", "paper-order", "strategy-save", "strategy-start", "strategy-pause", "strategy-delete", "halt", "risk", "backtest"}
         if operation not in (reads if request.method == "GET" else writes):
             return {"error": "Unsupported operation. Real-money orders are disabled."}, 404
         key = hmac.new(
