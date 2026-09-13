@@ -171,3 +171,57 @@ test("WebSocket validates subscription, receives heartbeat and closes at deadlin
     "2885",
   );
 });
+
+test("sensitive environment credentials allow a TOTP-only request without disclosure", async () => {
+  let supplied;
+  const r = response();
+  const handler = createBrokerCheck({
+    secret: "s".repeat(40),
+    storedCredentials: {
+      api_key: "stored-key",
+      client_code: "CLIENT12",
+      password: "0123",
+    },
+    run: async (c) => {
+      supplied = c;
+      return { authenticated: true };
+    },
+  });
+  await handler(
+    {
+      method: "POST",
+      headers: { authorization: "Bearer " + "s".repeat(40) },
+      body: { totp: "123456" },
+    },
+    r,
+  );
+  assert.equal(r.code, 200);
+  assert.equal(supplied.api_key, "stored-key");
+  assert.equal(supplied.password, "0123");
+  assert.equal(supplied.totp, "123456");
+  assert.ok(!JSON.stringify(r.body).includes("stored-key"));
+});
+
+test("TOTP setup secrets and missing environment configuration fail closed", async () => {
+  let calls = 0;
+  const handler = createBrokerCheck({
+    secret: "s".repeat(40),
+    storedCredentials: {},
+    run: async () => {
+      calls++;
+    },
+  });
+  for (const body of [{ totp_secret: "DO-NOT-SEND" }, { totp: "123456" }]) {
+    const r = response();
+    await handler(
+      {
+        method: "POST",
+        headers: { authorization: "Bearer " + "s".repeat(40) },
+        body,
+      },
+      r,
+    );
+    assert.ok([400, 503].includes(r.code));
+  }
+  assert.equal(calls, 0);
+});

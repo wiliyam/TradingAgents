@@ -20,9 +20,12 @@ Run `npm test` to check authentication, fixed destinations and error redaction.
 
 `POST /api/broker-check` uses the same probe bearer token. Its JSON body accepts
 only `api_key`, `client_code`, `password` and the current six-digit `totp`.
-Do not send a TOTP setup secret. The approved test sends these credentials over
-HTTPS to the Vercel function and then to Angel One; the application never logs
-or persists them, and never returns session tokens. Keep request/body logging
+Do not send a TOTP setup secret. The test sends supplied credentials over HTTPS to the Vercel function and then
+to Angel One; it never logs them or returns session tokens. With explicit owner
+authorization, `ANGELONE_API_KEY`, `ANGELONE_CLIENT_CODE`, and `ANGELONE_PIN` can
+be saved as sensitive production environment variables. In that mode, send only
+`{"totp":"<current-code>"}` in the request body. The TOTP setup secret stays local.
+Session tokens remain in memory only; environment credentials persist until removed. Keep request/body logging
 and tracing disabled when operating this credential-bearing endpoint.
 
 The test resolves the current egress IP, logs in, fetches a week of RELIANCE NSE
@@ -31,3 +34,14 @@ WebSocket observations with a deliberate reconnect. Results include handshake,
 heartbeat and quote-freshness measurements only. This is a short diagnostic,
 not proof of uninterrupted market-hours streaming or an execution gateway.
 It has no order, cancellation, fund-transfer or account-modification endpoints.
+
+## Verified diagnostic result — 2026-09-13
+
+The deployed function reported region `bom1`. Account authentication succeeded
+in 42 ms, the historical request returned 365 candles, and two successive
+12-second WebSocket observations connected successfully (27 ms and 19 ms
+handshakes). Each received two heartbeat responses and one quote frame; neither
+connection closed unexpectedly during observation. Both quotes were stale
+(approximately 26 hours old), so fresh market-hours delivery and sustained
+stream reliability remain unverified. No orders were submitted. These short
+samples are observations, not latency guarantees or execution benchmarks.

@@ -36,6 +36,11 @@ function valid(body) {
 export function createBrokerCheck({
   secret = process.env.PROBE_TOKEN,
   run = runBrokerCheck,
+  storedCredentials = {
+    api_key: process.env.ANGELONE_API_KEY,
+    client_code: process.env.ANGELONE_CLIENT_CODE,
+    password: process.env.ANGELONE_PIN,
+  },
 } = {}) {
   return async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -55,28 +60,42 @@ export function createBrokerCheck({
       return res.status(401).json({ error: "Unauthorized" });
     if (req.method !== "POST")
       return res.status(405).json({ error: "Use POST." });
-    if (!valid(req.body))
+    const totpOnly =
+      req.body &&
+      typeof req.body === "object" &&
+      !Array.isArray(req.body) &&
+      Object.keys(req.body).length === 1 &&
+      Object.hasOwn(req.body, "totp");
+    if (
+      totpOnly &&
+      ![
+        storedCredentials.api_key,
+        storedCredentials.client_code,
+        storedCredentials.password,
+      ].every(Boolean)
+    )
       return res
-        .status(400)
-        .json({
-          error:
-            "Provide API key, client code, PIN/password and a current six-digit TOTP only.",
-        });
+        .status(503)
+        .json({ error: "Broker environment credentials are not configured." });
+    const credentials = totpOnly
+      ? { ...storedCredentials, totp: req.body.totp }
+      : req.body;
+    if (!valid(credentials))
+      return res.status(400).json({
+        error:
+          "Provide API key, client code, PIN/password and a current six-digit TOTP only.",
+      });
     try {
-      return res
-        .status(200)
-        .json({
-          region: process.env.VERCEL_REGION || "local",
-          ...(await run(req.body)),
-          orders_submitted: 0,
-        });
+      return res.status(200).json({
+        region: process.env.VERCEL_REGION || "local",
+        ...(await run(credentials)),
+        orders_submitted: 0,
+      });
     } catch {
-      return res
-        .status(502)
-        .json({
-          error:
-            "Broker verification could not complete. No orders were submitted.",
-        });
+      return res.status(502).json({
+        error:
+          "Broker verification could not complete. No orders were submitted.",
+      });
     }
   };
 }
